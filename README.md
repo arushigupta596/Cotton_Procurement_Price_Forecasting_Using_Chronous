@@ -2,6 +2,12 @@
 
 A 3-month cotton price forecasting system for Vardhaman Group's raw cotton procurement, combining zero-shot time series prediction with weather-based correction.
 
+## Live Dashboard
+
+**[Open Streamlit Dashboard](https://cottonpriceforecast.streamlit.app)** — Interactive UI with forecast charts, state-wise tables, weather analysis, and downloadable CSVs.
+
+> To deploy your own: paste `https://github.com/arushigupta596/Cotton_Procurement_Price_Forecasting_Using_Chronous/blob/main/app.py` into [share.streamlit.io](https://share.streamlit.io)
+
 ---
 
 ## Overview
@@ -110,6 +116,22 @@ Outputs:
 
 Estimated runtime: 2-4 minutes (dominated by Chronos inference across walk-forward folds).
 
+### State-Wise Forecast
+```bash
+python state_forecast.py
+```
+Outputs:
+- `state_forecast_3months.csv` — 12-week predictions for Maharashtra, Gujarat, Haryana, Rajasthan, Madhya Pradesh
+- `state_price_forecast.png` — individual state forecast panels
+- `state_comparison_forecast.png` — all 5 states overlaid on one chart
+
+### Streamlit Dashboard (Local)
+```bash
+pip install streamlit plotly
+streamlit run app.py
+```
+Opens interactive dashboard at `http://localhost:8501` with forecast charts, tables, weather analysis, and state comparisons.
+
 ---
 
 ## Output Files
@@ -123,6 +145,22 @@ Estimated runtime: 2-4 minutes (dominated by Chronos inference across walk-forwa
 | `cotton_price_forecast_hybrid.png` | Hybrid forecast chart |
 | `weather_impact_analysis.png` | Feature importance + weekly adjustment chart |
 | `weather_cache_historical.csv` | Cached daily weather data (avoids re-fetching) |
+| `state_forecast_3months.csv` | State-wise 12-week forecast (5 states) |
+| `state_price_forecast.png` | Individual state forecast panels |
+| `state_comparison_forecast.png` | All states overlaid comparison chart |
+| `app.py` | Streamlit dashboard |
+
+---
+
+## State-Wise Forecast Summary
+
+| State | Current Price | 12-Week Forecast | Trend |
+|---|---|---|---|
+| Maharashtra | ~57,400 | ~57,000 | Stable (−0.7%) |
+| Gujarat | ~60,100 | ~57,900 | Declining (−3.6%) |
+| Haryana | ~50,700 | ~51,300 | Slight rise (+1.2%) |
+| Rajasthan | ~52,000 | ~53,100 | Rising (+2.1%) |
+| Madhya Pradesh | ~51,200 | ~54,800 | Strong rise (+7.0%) |
 
 ---
 
@@ -184,3 +222,5 @@ Weather conditions at forecast time pushed all weeks downward by Rs 375-1,443 pe
 | matplotlib | Visualization |
 | requests | Open-Meteo API calls |
 | openpyxl / xlrd | Excel file reading |
+| streamlit | Interactive dashboard |
+| plotly | Interactive charts in dashboard |
