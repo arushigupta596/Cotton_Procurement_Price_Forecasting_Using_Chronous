@@ -85,10 +85,22 @@ def load_data():
         purchase = pd.read_excel(purchase_path, sheet_name='Purchase Data', header=1)
         purchase['Purchase Date'] = pd.to_datetime(purchase['Purchase Date'])
 
-    return weekly, hybrid, chronos, purchase
+    state_forecast = None
+    if os.path.exists('state_forecast_3months.csv'):
+        state_forecast = pd.read_csv('state_forecast_3months.csv', parse_dates=['week'])
+
+    return weekly, hybrid, chronos, purchase, state_forecast
 
 
-weekly, hybrid, chronos, purchase = load_data()
+weekly, hybrid, chronos, purchase, state_forecast = load_data()
+
+STATE_COLORS = {
+    'Maharashtra': '#e74c3c',
+    'Gujarat': '#3498db',
+    'Haryana': '#27ae60',
+    'Rajasthan': '#f39c12',
+    'Madhya Pradesh': '#9b59b6',
+}
 
 # ============================================================
 # HEADER
@@ -246,6 +258,92 @@ elif chronos is not None:
     for col in display_df.columns[1:]:
         display_df[col] = display_df[col].apply(lambda x: f"₹{x:,.0f}")
     st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+# ============================================================
+# STATE-WISE FORECAST
+# ============================================================
+if state_forecast is not None:
+    st.markdown('<div class="section-title">State-Wise 3-Month Price Forecast</div>', unsafe_allow_html=True)
+
+    states_list = state_forecast['state'].unique().tolist()
+
+    # Summary metrics row
+    st_cols = st.columns(len(states_list))
+    for i, state in enumerate(states_list):
+        sdf = state_forecast[state_forecast['state'] == state]
+        first_price = sdf['predicted_median'].iloc[0]
+        last_price = sdf['predicted_median'].iloc[-1]
+        chg = ((last_price - first_price) / first_price) * 100
+        color = STATE_COLORS.get(state, '#666')
+        with st_cols[i]:
+            st.markdown(
+                f'<div style="background:{color}; padding:12px; border-radius:10px; color:white; text-align:center;">'
+                f'<div style="font-size:0.85rem; opacity:0.9;">{state}</div>'
+                f'<div style="font-size:1.4rem; font-weight:700;">₹{last_price:,.0f}</div>'
+                f'<div style="font-size:0.8rem;">{chg:+.1f}% over 12 wks</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    tab_chart, tab_table = st.tabs(["Comparison Chart", "Forecast Table"])
+
+    with tab_chart:
+        # Overlay all states
+        fig_states = go.Figure()
+        for state in states_list:
+            sdf = state_forecast[state_forecast['state'] == state]
+            color = STATE_COLORS.get(state, '#666')
+
+            fig_states.add_trace(go.Scatter(
+                x=pd.concat([sdf['week'], sdf['week'][::-1]]),
+                y=pd.concat([sdf['predicted_p75'], sdf['predicted_p25'][::-1]]),
+                fill='toself', fillcolor=f'rgba({int(color[1:3],16)},{int(color[3:5],16)},{int(color[5:7],16)},0.12)',
+                line=dict(color='rgba(255,255,255,0)'),
+                name=f'{state} (50% CI)', showlegend=False,
+            ))
+            fig_states.add_trace(go.Scatter(
+                x=sdf['week'], y=sdf['predicted_median'],
+                mode='lines+markers', name=state,
+                line=dict(color=color, width=2.5),
+                marker=dict(size=6),
+            ))
+
+        fig_states.update_layout(
+            title='State-Wise Cotton Price Forecast — Next 12 Weeks',
+            xaxis_title='Week', yaxis_title='Candy Rate (Rs/candy)',
+            yaxis_tickformat=',',
+            height=500, template='plotly_white',
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+            hovermode='x unified',
+        )
+        st.plotly_chart(fig_states, use_container_width=True)
+
+    with tab_table:
+        # Pivot table: weeks as rows, states as columns
+        pivot = state_forecast.pivot(index='week', columns='state', values='predicted_median')
+        pivot.index = pivot.index.strftime('%d %b %Y')
+        pivot.index.name = 'Week'
+
+        # Add weather adjustment row
+        adj_pivot = state_forecast.pivot(index='week', columns='state', values='weather_adjustment')
+        adj_pivot.index = adj_pivot.index.strftime('%d %b %Y')
+
+        st.markdown("**Predicted Median Candy Rate (Rs/candy)**")
+        display_pivot = pivot.copy()
+        for col in display_pivot.columns:
+            display_pivot[col] = display_pivot[col].apply(lambda x: f"₹{x:,.0f}")
+        st.dataframe(display_pivot, use_container_width=True, height=460)
+
+        st.markdown("**Weather Adjustments (Rs/candy)**")
+        display_adj = adj_pivot.copy()
+        for col in display_adj.columns:
+            display_adj[col] = display_adj[col].apply(lambda x: f"₹{x:+,.0f}")
+        st.dataframe(display_adj, use_container_width=True, height=460)
+
+        csv_state = state_forecast.to_csv(index=False)
+        st.download_button("Download State Forecast CSV", csv_state, "state_forecast_3months.csv", "text/csv")
 
 # ============================================================
 # WEATHER IMPACT ANALYSIS
