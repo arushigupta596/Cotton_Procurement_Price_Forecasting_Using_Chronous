@@ -4,7 +4,8 @@ import torch
 import requests
 import time
 import os
-from chronos import ChronosPipeline
+import re
+from chronos import Chronos2Pipeline
 from sklearn.ensemble import GradientBoostingRegressor
 import matplotlib
 matplotlib.use('Agg')
@@ -50,7 +51,83 @@ WEATHER_VARS = [
     'et0_fao_evapotranspiration', 'shortwave_radiation_sum'
 ]
 
+COMMODITY_COLS = ['ny_futures', 'cotlook_a', 'china_b', 'yarn_index', 'shankar6', 'forex']
 PREDICTION_LENGTH = 12
+
+# ============================================================
+# COMMODITY DATA (reuse from weather_hybrid_forecast)
+# ============================================================
+def parse_commodity_week(val):
+    if isinstance(val, pd.Timestamp):
+        return val
+    try:
+        return pd.to_datetime(val)
+    except Exception:
+        pass
+    s = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', str(val))
+    try:
+        return pd.to_datetime(s)
+    except Exception:
+        return pd.NaT
+
+
+def extract_commodity_data(spreadsheet_path='Data/15-WBS-24.01.26.xlsx'):
+    print("\nExtracting commodity data from market report...")
+    df = pd.read_excel(spreadsheet_path, sheet_name='spreadsheets-8', header=None)
+    data = df.iloc[4:].copy()
+    col_names = ['week_str', 'ny_futures', 'cotlook_a', 'china_b', 'yarn_index',
+                 'shankar6', 'forex'] + [f'gap_{i}' for i in range(9)]
+    data.columns = col_names[:len(data.columns)]
+    data = data.dropna(subset=['week_str'])
+    data = data[~data['week_str'].astype(str).str.contains('Avg|Max|Min', na=False)]
+    data['week'] = data['week_str'].apply(parse_commodity_week)
+    data = data.dropna(subset=['week'])
+    commodity = data[['week'] + COMMODITY_COLS].copy()
+    for col in COMMODITY_COLS:
+        commodity[col] = pd.to_numeric(commodity[col], errors='coerce')
+    commodity = commodity.sort_values('week').reset_index(drop=True)
+    commodity['week_key'] = commodity['week'].dt.to_period('W-SUN').apply(lambda r: r.start_time)
+    print(f"  Commodity data: {len(commodity)} weeks")
+    return commodity
+
+
+def align_commodity_with_prices(commodity_df, weekly_df):
+    weekly_df = weekly_df.copy()
+    weekly_df['week_key'] = weekly_df['week'].dt.to_period('W-SUN').apply(lambda r: r.start_time)
+    commodity_dedup = commodity_df.drop_duplicates(subset='week_key', keep='last')
+    merged = weekly_df.merge(commodity_dedup[['week_key'] + COMMODITY_COLS], on='week_key', how='left')
+    for col in COMMODITY_COLS:
+        merged[col] = merged[col].ffill().bfill()
+    return merged
+
+
+def fetch_live_commodity_forecasts(commodity_df, prediction_length=12):
+    future_covariates = {}
+    try:
+        import yfinance as yf
+        try:
+            ct = yf.Ticker("CT=F")
+            hist = ct.history(period="5d")
+            if len(hist) > 0:
+                future_covariates['ny_futures'] = np.full(prediction_length, hist['Close'].iloc[-1])
+            else:
+                raise ValueError("No data")
+        except Exception:
+            future_covariates['ny_futures'] = np.full(prediction_length, commodity_df['ny_futures'].iloc[-1])
+        try:
+            inr = yf.Ticker("INR=X")
+            hist = inr.history(period="5d")
+            if len(hist) > 0:
+                future_covariates['forex'] = np.full(prediction_length, hist['Close'].iloc[-1])
+            else:
+                raise ValueError("No data")
+        except Exception:
+            future_covariates['forex'] = np.full(prediction_length, commodity_df['forex'].iloc[-1])
+    except ImportError:
+        future_covariates['ny_futures'] = np.full(prediction_length, commodity_df['ny_futures'].iloc[-1])
+        future_covariates['forex'] = np.full(prediction_length, commodity_df['forex'].iloc[-1])
+    return future_covariates
+
 
 # ============================================================
 # WEATHER FETCHING
@@ -150,19 +227,47 @@ def engineer_features(daily_weather, weekly_dates):
 
 
 # ============================================================
-# CHRONOS
+# CHRONOS-2 MULTIVARIATE
 # ============================================================
-def run_chronos(pipeline, series, pred_len=12):
-    ctx = torch.tensor(series.values, dtype=torch.float32)
-    forecast = pipeline.predict(inputs=ctx.unsqueeze(0), prediction_length=pred_len, num_samples=100, temperature=1.0)
-    f = forecast.squeeze(0).numpy()
+def run_chronos2_multivariate(pipeline, series, commodity_data,
+                               future_covariates=None, pred_len=12):
+    """Run Chronos-2 with commodity covariates."""
+    target = torch.tensor(series.values, dtype=torch.float32)
+
+    past_covariates = {}
+    for col in COMMODITY_COLS:
+        if col in commodity_data.columns:
+            past_covariates[col] = torch.tensor(
+                commodity_data[col].values, dtype=torch.float32
+            )
+
+    input_dict = {"target": target, "past_covariates": past_covariates}
+
+    if future_covariates:
+        fc_dict = {}
+        for name, values in future_covariates.items():
+            fc_dict[name] = torch.tensor(values[:pred_len], dtype=torch.float32)
+        input_dict["future_covariates"] = fc_dict
+
+    forecast = pipeline.predict(inputs=[input_dict], prediction_length=pred_len)
+    forecast_np = forecast[0].squeeze(0).numpy()  # (n_quantiles, pred_len)
+
+    q_list = pipeline.quantiles
     return {
-        'median': np.median(f, axis=0),
-        'p10': np.percentile(f, 10, axis=0),
-        'p25': np.percentile(f, 25, axis=0),
-        'p75': np.percentile(f, 75, axis=0),
-        'p90': np.percentile(f, 90, axis=0),
+        'median': forecast_np[q_list.index(0.5)],
+        'p10': forecast_np[q_list.index(0.1)],
+        'p25': forecast_np[q_list.index(0.25)],
+        'p75': forecast_np[q_list.index(0.75)],
+        'p90': forecast_np[q_list.index(0.9)],
     }
+
+
+def run_chronos2_univariate(pipeline, series, pred_len=12):
+    """Run Chronos-2 univariate for walk-forward folds."""
+    target = torch.tensor(series.values, dtype=torch.float32)
+    forecast = pipeline.predict(inputs=[{"target": target}], prediction_length=pred_len)
+    forecast_np = forecast[0].squeeze(0).numpy()
+    return {'median': forecast_np[pipeline.quantiles.index(0.5)]}
 
 
 # ============================================================
@@ -185,7 +290,7 @@ def train_residual_model(weekly_df, weather_features, pipeline):
         pred_len = test_end - cutoff
         if pred_len < 4:
             continue
-        chrono_f = run_chronos(pipeline, merged['avg_candy_rate'].iloc[:cutoff], pred_len)
+        chrono_f = run_chronos2_univariate(pipeline, merged['avg_candy_rate'].iloc[:cutoff], pred_len)
         residuals = merged['avg_candy_rate'].iloc[cutoff:test_end].values - chrono_f['median']
         all_X.append(merged[feat_cols].iloc[cutoff:test_end].values)
         all_y.append(residuals)
@@ -210,7 +315,7 @@ def train_residual_model(weekly_df, weather_features, pipeline):
 def main():
     print("=" * 70)
     print("STATE-WISE COTTON PRICE FORECAST (3 MONTHS)")
-    print("Hybrid: Amazon Chronos + State-Specific Weather Regression")
+    print("Hybrid: Chronos-2 Multivariate (Commodity Covariates) + Weather Regression")
     print("=" * 70)
 
     # Load purchase data
@@ -219,9 +324,18 @@ def main():
     df = df.sort_values('Purchase Date')
     df['week'] = df['Purchase Date'].dt.to_period('W').apply(lambda r: r.start_time)
 
-    # Load Chronos once
-    print("\nLoading Chronos model...")
-    pipeline = ChronosPipeline.from_pretrained("amazon/chronos-t5-small", device_map="cpu", dtype=torch.float32)
+    # Extract commodity data (national-level, same for all states)
+    commodity = extract_commodity_data()
+
+    # Fetch live commodity forecasts
+    future_covariates = fetch_live_commodity_forecasts(commodity, PREDICTION_LENGTH)
+    print(f"  Future covariates: NY Futures={future_covariates['ny_futures'][0]:.2f}, "
+          f"Forex={future_covariates['forex'][0]:.2f}")
+
+    # Load Chronos-2 once
+    print("\nLoading Chronos-2 model...")
+    pipeline = Chronos2Pipeline.from_pretrained("amazon/chronos-2", device_map="cpu", dtype=torch.float32)
+    print(f"  Model loaded — {len(pipeline.quantiles)} quantiles")
 
     all_forecasts = {}
 
@@ -247,6 +361,9 @@ def main():
         print(f"  Price series: {len(weekly)} weeks")
         print(f"  Last price: ₹{weekly['avg_candy_rate'].iloc[-1]:,.0f}")
 
+        # Align commodity data with state price series
+        commodity_aligned = align_commodity_with_prices(commodity, weekly)
+
         # Fetch state-specific weather
         cache_file = f"weather_cache_{state_name.lower().replace(' ', '_')}.csv"
         if os.path.exists(cache_file):
@@ -260,12 +377,15 @@ def main():
             if daily_w is not None:
                 daily_w.to_csv(cache_file)
             else:
-                print(f"  FAILED to fetch weather, using Chronos-only")
+                print(f"  FAILED to fetch weather, using Chronos-2 multivariate only")
                 daily_w = None
 
-        # Chronos baseline
-        print(f"  Running Chronos forecast...")
-        chronos_result = run_chronos(pipeline, weekly['avg_candy_rate'], PREDICTION_LENGTH)
+        # Chronos-2 multivariate baseline (with commodity covariates)
+        print(f"  Running Chronos-2 multivariate forecast...")
+        chronos_result = run_chronos2_multivariate(
+            pipeline, weekly['avg_candy_rate'],
+            commodity_aligned, future_covariates, PREDICTION_LENGTH
+        )
 
         # Weather correction
         residual_adj = np.zeros(PREDICTION_LENGTH)
@@ -363,7 +483,7 @@ def main():
         ax.plot(fc['week'], fc['predicted_median'], color=color, linewidth=2.5, marker='o', markersize=4, label='Hybrid Forecast')
         ax.fill_between(fc['week'], fc['predicted_p25'], fc['predicted_p75'], alpha=0.25, color=color)
         ax.fill_between(fc['week'], fc['predicted_p10'], fc['predicted_p90'], alpha=0.1, color=color)
-        ax.plot(fc['week'], fc['chronos_median'], color='#bdc3c7', linewidth=1.2, linestyle='--', label='Chronos Baseline')
+        ax.plot(fc['week'], fc['chronos_median'], color='#bdc3c7', linewidth=1.2, linestyle='--', label='Chronos-2 Baseline')
 
         current = hist['avg_candy_rate'].iloc[-1]
         end = fc['predicted_median'].iloc[-1]
@@ -395,7 +515,7 @@ def main():
                     bbox=dict(boxstyle='round,pad=0.8', facecolor='#f8f9fa', edgecolor='#dee2e6'))
 
     fig.suptitle('Vardhaman Cotton Procurement — State-Wise 3-Month Price Forecast\n'
-                 '(Hybrid: Chronos Zero-Shot + State-Specific Weather Regression)',
+                 '(Hybrid: Chronos-2 Multivariate Zero-Shot + Weather Regression)',
                  fontsize=16, fontweight='bold', y=1.02)
     plt.tight_layout()
     plt.savefig('state_price_forecast.png', dpi=150, bbox_inches='tight')
@@ -412,7 +532,8 @@ def main():
                  markersize=5, label=state, color=color)
         ax2.fill_between(fc['week'], fc['predicted_p25'], fc['predicted_p75'], alpha=0.15, color=color)
 
-    ax2.set_title('State-Wise Cotton Price Forecast Comparison (Next 12 Weeks)',
+    ax2.set_title('State-Wise Cotton Price Forecast Comparison (Next 12 Weeks)\n'
+                  'Chronos-2 Multivariate + Weather Correction',
                   fontsize=15, fontweight='bold')
     ax2.set_xlabel('Week', fontsize=12)
     ax2.set_ylabel('Candy Rate (Rs/candy)', fontsize=12)
