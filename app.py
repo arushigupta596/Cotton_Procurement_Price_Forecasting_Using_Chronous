@@ -85,32 +85,16 @@ def load_data():
         purchase = pd.read_excel(purchase_path, sheet_name='Purchase Data', header=1)
         purchase['Purchase Date'] = pd.to_datetime(purchase['Purchase Date'])
 
-    state_forecast = None
-    if os.path.exists('state_forecast_3months.csv'):
-        state_forecast = pd.read_csv('state_forecast_3months.csv', parse_dates=['week'])
-
-    commodity = None
-    if os.path.exists('commodity_weekly.csv'):
-        commodity = pd.read_csv('commodity_weekly.csv', parse_dates=['week'])
-
-    return weekly, hybrid, chronos, purchase, state_forecast, commodity
+    return weekly, hybrid, chronos, purchase
 
 
-weekly, hybrid, chronos, purchase, state_forecast, commodity = load_data()
-
-STATE_COLORS = {
-    'Maharashtra': '#e74c3c',
-    'Gujarat': '#3498db',
-    'Haryana': '#27ae60',
-    'Rajasthan': '#f39c12',
-    'Madhya Pradesh': '#9b59b6',
-}
+weekly, hybrid, chronos, purchase = load_data()
 
 # ============================================================
 # HEADER
 # ============================================================
 st.markdown('<div class="main-header">Vardhaman Cotton Procurement Price Forecast</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Hybrid Model: Chronos-2 Multivariate Zero-Shot + Weather Regression | 12-Week Forecast</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Hybrid Model: Amazon Chronos Zero-Shot + Weather Regression | 12-Week Forecast</div>', unsafe_allow_html=True)
 
 # ============================================================
 # SIDEBAR
@@ -121,7 +105,7 @@ with st.sidebar:
 
     history_weeks = st.slider("Historical weeks to display", 12, len(weekly), 52, step=4)
 
-    show_chronos_baseline = st.checkbox("Show Chronos-2 baseline", value=True)
+    show_chronos_baseline = st.checkbox("Show Chronos-only baseline", value=True)
     show_confidence = st.checkbox("Show confidence intervals", value=True)
     confidence_level = st.radio("Confidence band", ["50% (p25-p75)", "80% (p10-p90)"], index=1)
 
@@ -136,8 +120,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### Model Info")
-    st.markdown("**Base model:** Chronos-2 (Multivariate)")
-    st.markdown("**Covariates:** NY Futures, Cotlook A', China B, Yarn Index, Forex")
+    st.markdown("**Base model:** Chronos-T5-Small")
     st.markdown("**Correction:** GradientBoosting on weather residuals")
     st.markdown("**Weather regions:** 5 cotton belt stations")
     st.markdown("**Features:** 19 weekly weather features")
@@ -171,139 +154,6 @@ if hybrid is not None:
     with col5:
         forecast_range = hybrid['predicted_candy_rate_p90'].max() - hybrid['predicted_candy_rate_p10'].min()
         st.metric("Forecast Range (80%)", f"₹{forecast_range:,.0f}")
-
-# ============================================================
-# GLOBAL MARKET SIGNALS
-# ============================================================
-if commodity is not None and len(commodity) > 0:
-    st.markdown('<div class="section-title">Global Market Signals</div>', unsafe_allow_html=True)
-
-    latest = commodity.iloc[-1]
-
-    # Metric cards for latest commodity values
-    gm1, gm2, gm3, gm4, gm5, gm6 = st.columns(6)
-
-    # Calculate week-over-week changes
-    if len(commodity) >= 2:
-        prev = commodity.iloc[-2]
-    else:
-        prev = latest
-
-    with gm1:
-        chg = latest['ny_futures'] - prev['ny_futures']
-        st.markdown(
-            f'<div style="background:linear-gradient(135deg, #1e3a5f 0%, #2980b9 100%); '
-            f'padding:12px; border-radius:10px; color:white; text-align:center;">'
-            f'<div style="font-size:0.75rem; opacity:0.85;">NY Cotton Futures</div>'
-            f'<div style="font-size:1.4rem; font-weight:700;">{latest["ny_futures"]:.2f}</div>'
-            f'<div style="font-size:0.7rem;">usc/lb ({chg:+.2f})</div></div>',
-            unsafe_allow_html=True,
-        )
-    with gm2:
-        chg = latest['cotlook_a'] - prev['cotlook_a']
-        st.markdown(
-            f'<div style="background:linear-gradient(135deg, #1e5f3a 0%, #27ae60 100%); '
-            f'padding:12px; border-radius:10px; color:white; text-align:center;">'
-            f'<div style="font-size:0.75rem; opacity:0.85;">Cotlook A\' Index</div>'
-            f'<div style="font-size:1.4rem; font-weight:700;">{latest["cotlook_a"]:.2f}</div>'
-            f'<div style="font-size:0.7rem;">usc/lb ({chg:+.2f})</div></div>',
-            unsafe_allow_html=True,
-        )
-    with gm3:
-        chg = latest['china_b'] - prev['china_b']
-        st.markdown(
-            f'<div style="background:linear-gradient(135deg, #5f1e3a 0%, #c0392b 100%); '
-            f'padding:12px; border-radius:10px; color:white; text-align:center;">'
-            f'<div style="font-size:0.75rem; opacity:0.85;">China B Index</div>'
-            f'<div style="font-size:1.4rem; font-weight:700;">{latest["china_b"]:.2f}</div>'
-            f'<div style="font-size:0.7rem;">usc/lb ({chg:+.2f})</div></div>',
-            unsafe_allow_html=True,
-        )
-    with gm4:
-        chg = latest['yarn_index'] - prev['yarn_index']
-        st.markdown(
-            f'<div style="background:linear-gradient(135deg, #5f4b1e 0%, #f39c12 100%); '
-            f'padding:12px; border-radius:10px; color:white; text-align:center;">'
-            f'<div style="font-size:0.75rem; opacity:0.85;">Yarn Index</div>'
-            f'<div style="font-size:1.4rem; font-weight:700;">{latest["yarn_index"]:.2f}</div>'
-            f'<div style="font-size:0.7rem;">({chg:+.2f})</div></div>',
-            unsafe_allow_html=True,
-        )
-    with gm5:
-        chg = latest['shankar6'] - prev['shankar6']
-        st.markdown(
-            f'<div style="background:linear-gradient(135deg, #3a1e5f 0%, #8e44ad 100%); '
-            f'padding:12px; border-radius:10px; color:white; text-align:center;">'
-            f'<div style="font-size:0.75rem; opacity:0.85;">Shankar-6</div>'
-            f'<div style="font-size:1.4rem; font-weight:700;">₹{latest["shankar6"]:,.0f}</div>'
-            f'<div style="font-size:0.7rem;">Rs/candy ({chg:+,.0f})</div></div>',
-            unsafe_allow_html=True,
-        )
-    with gm6:
-        chg = latest['forex'] - prev['forex']
-        st.markdown(
-            f'<div style="background:linear-gradient(135deg, #1e5f5f 0%, #16a085 100%); '
-            f'padding:12px; border-radius:10px; color:white; text-align:center;">'
-            f'<div style="font-size:0.75rem; opacity:0.85;">USD/INR Forex</div>'
-            f'<div style="font-size:1.4rem; font-weight:700;">{latest["forex"]:.2f}</div>'
-            f'<div style="font-size:0.7rem;">₹/$ ({chg:+.2f})</div></div>',
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # Mini charts: NY Futures + Forex (last 52 weeks)
-    tab_ny, tab_cotlook, tab_forex = st.tabs(["NY Futures Trend", "Cotlook A' Trend", "USD/INR Forex Trend"])
-
-    recent_52 = commodity.tail(52)
-
-    with tab_ny:
-        fig_ny = go.Figure()
-        fig_ny.add_trace(go.Scatter(
-            x=recent_52['week'], y=recent_52['ny_futures'],
-            mode='lines', name='NY Cotton Futures',
-            line=dict(color='#2980b9', width=2.5),
-            fill='tozeroy', fillcolor='rgba(41, 128, 185, 0.1)',
-        ))
-        fig_ny.update_layout(
-            title='NY Cotton Futures (Last 52 Weeks)',
-            xaxis_title='Week', yaxis_title='usc/lb',
-            height=350, template='plotly_white',
-            margin=dict(t=40, b=40),
-        )
-        st.plotly_chart(fig_ny, use_container_width=True)
-
-    with tab_cotlook:
-        fig_cl = go.Figure()
-        fig_cl.add_trace(go.Scatter(
-            x=recent_52['week'], y=recent_52['cotlook_a'],
-            mode='lines', name="Cotlook A' Index",
-            line=dict(color='#27ae60', width=2.5),
-            fill='tozeroy', fillcolor='rgba(39, 174, 96, 0.1)',
-        ))
-        fig_cl.update_layout(
-            title="Cotlook A' Index (Last 52 Weeks)",
-            xaxis_title='Week', yaxis_title='usc/lb',
-            height=350, template='plotly_white',
-            margin=dict(t=40, b=40),
-        )
-        st.plotly_chart(fig_cl, use_container_width=True)
-
-    with tab_forex:
-        fig_fx = go.Figure()
-        fig_fx.add_trace(go.Scatter(
-            x=recent_52['week'], y=recent_52['forex'],
-            mode='lines', name='USD/INR',
-            line=dict(color='#16a085', width=2.5),
-            fill='tozeroy', fillcolor='rgba(22, 160, 133, 0.1)',
-        ))
-        fig_fx.update_layout(
-            title='USD/INR Exchange Rate (Last 52 Weeks)',
-            xaxis_title='Week', yaxis_title='₹/$',
-            height=350, template='plotly_white',
-            margin=dict(t=40, b=40),
-        )
-        st.plotly_chart(fig_fx, use_container_width=True)
 
 # ============================================================
 # MAIN FORECAST CHART
@@ -398,92 +248,6 @@ elif chronos is not None:
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 # ============================================================
-# STATE-WISE FORECAST
-# ============================================================
-if state_forecast is not None:
-    st.markdown('<div class="section-title">State-Wise 3-Month Price Forecast</div>', unsafe_allow_html=True)
-
-    states_list = state_forecast['state'].unique().tolist()
-
-    # Summary metrics row
-    st_cols = st.columns(len(states_list))
-    for i, state in enumerate(states_list):
-        sdf = state_forecast[state_forecast['state'] == state]
-        first_price = sdf['predicted_median'].iloc[0]
-        last_price = sdf['predicted_median'].iloc[-1]
-        chg = ((last_price - first_price) / first_price) * 100
-        color = STATE_COLORS.get(state, '#666')
-        with st_cols[i]:
-            st.markdown(
-                f'<div style="background:{color}; padding:12px; border-radius:10px; color:white; text-align:center;">'
-                f'<div style="font-size:0.85rem; opacity:0.9;">{state}</div>'
-                f'<div style="font-size:1.4rem; font-weight:700;">₹{last_price:,.0f}</div>'
-                f'<div style="font-size:0.8rem;">{chg:+.1f}% over 12 wks</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    tab_chart, tab_table = st.tabs(["Comparison Chart", "Forecast Table"])
-
-    with tab_chart:
-        # Overlay all states
-        fig_states = go.Figure()
-        for state in states_list:
-            sdf = state_forecast[state_forecast['state'] == state]
-            color = STATE_COLORS.get(state, '#666')
-
-            fig_states.add_trace(go.Scatter(
-                x=pd.concat([sdf['week'], sdf['week'][::-1]]),
-                y=pd.concat([sdf['predicted_p75'], sdf['predicted_p25'][::-1]]),
-                fill='toself', fillcolor=f'rgba({int(color[1:3],16)},{int(color[3:5],16)},{int(color[5:7],16)},0.12)',
-                line=dict(color='rgba(255,255,255,0)'),
-                name=f'{state} (50% CI)', showlegend=False,
-            ))
-            fig_states.add_trace(go.Scatter(
-                x=sdf['week'], y=sdf['predicted_median'],
-                mode='lines+markers', name=state,
-                line=dict(color=color, width=2.5),
-                marker=dict(size=6),
-            ))
-
-        fig_states.update_layout(
-            title='State-Wise Cotton Price Forecast — Next 12 Weeks',
-            xaxis_title='Week', yaxis_title='Candy Rate (Rs/candy)',
-            yaxis_tickformat=',',
-            height=500, template='plotly_white',
-            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
-            hovermode='x unified',
-        )
-        st.plotly_chart(fig_states, use_container_width=True)
-
-    with tab_table:
-        # Pivot table: weeks as rows, states as columns
-        pivot = state_forecast.pivot(index='week', columns='state', values='predicted_median')
-        pivot.index = pivot.index.strftime('%d %b %Y')
-        pivot.index.name = 'Week'
-
-        # Add weather adjustment row
-        adj_pivot = state_forecast.pivot(index='week', columns='state', values='weather_adjustment')
-        adj_pivot.index = adj_pivot.index.strftime('%d %b %Y')
-
-        st.markdown("**Predicted Median Candy Rate (Rs/candy)**")
-        display_pivot = pivot.copy()
-        for col in display_pivot.columns:
-            display_pivot[col] = display_pivot[col].apply(lambda x: f"₹{x:,.0f}")
-        st.dataframe(display_pivot, use_container_width=True, height=460)
-
-        st.markdown("**Weather Adjustments (Rs/candy)**")
-        display_adj = adj_pivot.copy()
-        for col in display_adj.columns:
-            display_adj[col] = display_adj[col].apply(lambda x: f"₹{x:+,.0f}")
-        st.dataframe(display_adj, use_container_width=True, height=460)
-
-        csv_state = state_forecast.to_csv(index=False)
-        st.download_button("Download State Forecast CSV", csv_state, "state_forecast_3months.csv", "text/csv")
-
-# ============================================================
 # WEATHER IMPACT ANALYSIS
 # ============================================================
 if hybrid is not None:
@@ -551,7 +315,7 @@ if purchase is not None:
     tab1, tab2, tab3 = st.tabs(["Price Trend", "State Breakdown", "Cotton Varieties"])
 
     with tab1:
-        monthly = purchase.set_index('Purchase Date').resample('M').apply(
+        monthly = purchase.set_index('Purchase Date').resample('ME').apply(
             lambda g: np.average(g['Candy Rate'], weights=g['Bales']) if len(g) > 0 else np.nan
         ).dropna()
 
@@ -652,22 +416,12 @@ with st.expander("Methodology & Technical Details"):
     st.markdown("""
     ### Hybrid Forecasting Approach
 
-    **Stage 1 — Chronos-2 Multivariate Zero-Shot Baseline**
-    Amazon Chronos-2 (120M parameters, encoder-only) generates a probabilistic 12-week forecast
-    using **multivariate zero-shot** inference. The model takes the candy rate as the target and
-    six global commodity signals as covariates:
-    - NY Cotton Futures (usc/lb) — via yfinance live data
-    - Cotlook A' Index (usc/lb)
-    - China B Index (usc/lb)
-    - Yarn Index
-    - Shankar-6 (Rs/candy)
-    - USD/INR Forex Rate — via yfinance live data
-
-    The model internally captures cross-series dependencies via attention, enabling it to account
-    for global commodity market shocks — all without any task-specific training.
+    **Stage 1 — Chronos Zero-Shot Baseline**
+    Amazon Chronos-T5-Small generates a probabilistic 12-week forecast purely from price history.
+    The model was pretrained on millions of diverse time series and requires no task-specific training.
 
     **Stage 2 — Weather Correction**
-    A GradientBoostingRegressor learns Chronos-2's prediction errors (residuals) from 19 weather features
+    A GradientBoostingRegressor learns Chronos's prediction errors (residuals) from 19 weather features
     covering temperature, rainfall, humidity, radiation, and their lags/anomalies across 5 cotton-growing
     regions weighted by Vardhaman's actual procurement share.
 
@@ -676,7 +430,7 @@ with st.expander("Methodology & Technical Details"):
     and simulating real-time forecasting conditions.
 
     **Final Output:**
-    `Predicted Price = Chronos-2 Multivariate Baseline + Weather Adjustment`
+    `Predicted Price = Chronos Baseline + Weather Adjustment`
 
     ---
     **Unit:** 1 Candy = 355.62 kg of raw cotton. Rs/candy is the standard Indian cotton trading unit.
@@ -689,8 +443,7 @@ st.markdown("---")
 st.markdown(
     '<div style="text-align:center; color:#aaa; font-size:0.85rem;">'
     'Vardhaman Cotton Price Forecast Dashboard | '
-    'Built with Streamlit | '
-    'Model: Chronos-2 Multivariate + Weather Regression'
+    'Model: Amazon Chronos + Weather Regression'
     '</div>',
     unsafe_allow_html=True,
 )
